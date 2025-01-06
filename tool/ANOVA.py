@@ -69,39 +69,6 @@ def bartlett_test(*groups, alpha = 0.05):
     # Return the statistic and p-value
     return statistic, p_value
 
-def normality_test(data):
-    """
-    Perform normality tests on the given data.
-
-    Parameters:
-    data: A 1D array or list of numerical data.
-
-    Returns:
-    results: A dictionary containing test statistics and p-values for multiple normality tests.
-    """
-    from scipy.stats import shapiro, anderson, normaltest
-    
-    results = {}
-
-    # Shapiro-Wilk Test
-    stat_shapiro, p_value_shapiro = shapiro(data)
-    results['Shapiro-Wilk Test'] = {'Statistic': stat_shapiro, 'P-value': p_value_shapiro}
-
-    # Anderson-Darling Test
-    result_anderson = anderson(data)
-    results['Anderson-Darling Test'] = {'Statistic': result_anderson.statistic, 'Critical Values': result_anderson.critical_values, 'Significance Level': result_anderson.significance_level}
-
-    # jarque_bera Test
-    stat, p_value = jarque_bera(data)
-    results['jarque_bera Test'] = {'Statistic': stat, 'P-value': p_value}
-
-    # D'Agostino and Pearson's Normality Test
-    if len(data)>7:
-        stat_dagostino, p_value_dagostino = normaltest(data)
-        results["D'Agostino-Pearson Test"] = {'Statistic': stat_dagostino, 'P-value': p_value_dagostino}
-
-    return results
-
 def anova_with_posthoc(*groups):
     """
     Perform a one-way ANOVA test followed by Tukey's HSD post hoc test if the ANOVA is significant.
@@ -426,34 +393,6 @@ swing = [-12.4,5.2,-7.6,3.5,-2.3,-0.4,2.7]     # Swing
 res = one_factor_repeated_anova(stanceswing, stance, swing)
 print(res)
 
-### check the effect of exo assistance
-stanceswing_midstance = [0.5, 8.0, 8.2, 9.3, 11.0, 19.5, 36.7]      # Stance & Swing most affected
-stanceswing_Initial = [0.4,7.3,3.3,5.4,10.7,8.5,11.7]               # Stance & Swing most affected
-
-# # Perform one-sample t-test
-res = one_sample_t_test(stanceswing_midstance, test_value=0, alpha=0.05)
-results = normality_test(stanceswing_midstance)
-print(res)
-
-res = one_sample_t_test(stanceswing_Initial, test_value=0, alpha=0.05)
-results = normality_test(stanceswing_Initial)
-print(res)
-
-stanceswing_midstance_less = [-6.2,5.2,5.6,8.9,8.6,6.9,11.5]    # Stance & Swing less affected
-stanceswing_Initial_less = [0.5,10.2,2.8,6.7,-2.1,8.8,19.3]   # Stance & Swing less affected
-res = one_sample_t_test(stanceswing_midstance_less, test_value=0, alpha=0.05)
-results = normality_test(stanceswing_midstance_less)
-print(res)
-# # If p-value is less than 0.05, data is not normally distributed
-print("Data is not normally distributed. Performing the Wilcoxon Signed-Rank Test.")
-# Perform Wilcoxon Signed-Rank Test (comparing against a population mean of 0)
-stat, p_value = stats.wilcoxon(np.array(stanceswing_midstance_less) - 0)  # 0 is the hypothesized median
-print(f"Wilcoxon Signed-Rank Test p-value: {p_value}")
-
-
-res = one_sample_t_test(stanceswing_Initial_less, test_value=0, alpha=0.05)
-results = normality_test(stanceswing_Initial_less)
-print(res)
 
 
 # ## ===========================================
