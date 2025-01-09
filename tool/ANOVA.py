@@ -14,10 +14,271 @@
 
 import numpy as np
 import pandas as pd
+from pingouin import pairwise_gameshowell
 from scipy import stats
-from scipy.stats import jarque_bera
-from scipy.stats import levene
+from scipy.stats import levene, ttest_ind, jarque_bera
+from scipy.stats import f_oneway, shapiro, levene, kruskal
+from scikit_posthocs import posthoc_dunn
 from statsmodels.stats.power import TTestPower
+from statsmodels.stats.multitest import multipletests
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
+
+
+def one_way_anova(data, group_names=None, alpha=0.05, post_hoc_method='tukey'):
+    """
+    Perform one-way ANOVA, check requirements, and conduct post-hoc tests if significant.
+
+    Parameters:
+        data (list of lists): A list where each inner list represents data for a group.
+        group_names (list): Names of the groups (default: None).
+        alpha (float): Significance level (default: 0.05).
+        post_hoc_method (str): Post-hoc method ('tukey', 'dunn', 'games-howell').
+
+    
+    1. Tukey's HSD (Honest Significant Difference)
+    - **Usage**: Tukey's HSD is one of the most commonly used post-hoc tests. 
+    - **Assumptions**: Assumes equal variances (homoscedasticity) and normally distributed data.
+    - **Characteristics**: It is a conservative test, meaning it minimizes the chances of Type I errors (false positives).
+
+    2. **Dunn's Test**
+    - **Usage**: Dunn's test is a non-parametric post-hoc test used after a Kruskal-Wallis test (non-parametric equivalent of ANOVA). It compares all pairs of groups without assuming normality or equal variances.
+    - **Assumptions**: No assumptions about normality or homogeneity of variance, making it ideal for non-normally distributed data.
+    - **Characteristics**: It uses a ranking approach, which makes it less powerful than parametric tests like Tukey, but more robust to violations of assumptions.
+    - **Output**: Dunn’s test calculates p-values adjusted for multiple comparisons, typically using the Bonferroni correction or similar adjustments.
+
+    3. **Games-Howell Test**
+    - **Usage**: The Games-Howell test is an alternative to Tukey's HSD when the assumption of equal variances is violated. It adjusts for both unequal variances and unequal sample sizes.
+    - **Assumptions**: Does not assume homogeneity of variance or normality.
+    - **Characteristics**: More robust than Tukey's test when variances are unequal or sample sizes are not the same across groups. It is less conservative than Tukey's HSD but controls for Type I errors.
+
+    4. **Scheffé Test**
+    - **Usage**: The Scheffé test is a highly conservative post-hoc test. It is particularly useful when comparing all possible linear combinations of groups (not just pairwise comparisons). It can handle complex contrasts between groups.
+    - **Assumptions**: Assumes equal variances and normality.
+    - **Characteristics**: Scheffé's test is more conservative than Tukey’s HSD. It is particularly useful when you need to test more complex hypotheses, such as comparing a combination of groups, rather than just pairwise comparisons.
+    - **Output**: It provides adjusted p-values and pairwise comparisons, but it is more likely to result in a higher p-value (more conservative).
+
+    5. **Dunnett's Test**
+    - **Method**: `pairwise_ttests` with padjust='dunnett'
+    - **Usage**: Dunnett's test is used when comparing several experimental groups against a single control group. It is typically used in situations where one group is a control, and you want to compare each experimental group against the control.
+    - **Assumptions**: Assumes normality and equal variances (homoscedasticity) in the data.
+    - **Characteristics**: Unlike other tests, Dunnett’s test controls for the Type I error rate specifically when comparing multiple treatments to a single control group. It adjusts for multiple comparisons but is less conservative when compared to methods like Scheffé.
+
+    Returns:
+        dict: A dictionary with the ANOVA result, requirement checks, and post-hoc results (if applicable).
+    """
+    # Convert to numpy arrays for easier processing
+    group_data = [np.array(group)[~np.isnan(group)] for group in data]
+    num_groups = len(group_data)
+    group_names = group_names if group_names else [f"Group {i+1}" for i in range(num_groups)]
+
+    # Check requirements
+    # 1. Normality (Shapiro-Wilk Test for each group)
+    normality_results = {name: shapiro(group)[1] for name, group in zip(group_names, group_data)}
+    normality_passed = all(p > alpha for p in normality_results.values())
+
+    # 2. Homogeneity of variances (Levene's Test)
+    levene_p = levene(*group_data)[1]
+    homogeneity_passed = levene_p > alpha
+
+    # If requirements are not met, provide suggestions
+    suggestions = []
+    if not normality_passed:
+        suggestions.append("Data is not normally distributed. Consider using a Kruskal-Wallis test.")
+    if not homogeneity_passed:
+        suggestions.append("Data does not meet homogeneity of variance. Consider using Welch's ANOVA.")
+
+    if suggestions:
+        return {
+            'ANOVA': 'Requirements not met',
+            'Normality': normality_results,
+            'Homogeneity of variances': levene_p,
+            'Suggestion': ' '.join(suggestions)
+        }
+
+    # Perform ANOVA
+    f_stat, p_value = f_oneway(*group_data)
+    anova_result = {'F-statistic': f_stat, 'p-value': p_value}
+
+    # Post-hoc test if ANOVA shows significance
+    if p_value < alpha:
+        all_values = np.concatenate(group_data)
+        all_groups = np.concatenate([[name] * len(group) for name, group in zip(group_names, group_data)])
+        df = pd.DataFrame({'value': all_values, 'group': all_groups})
+
+        if post_hoc_method == 'tukey':
+            post_hoc = pairwise_tukeyhsd(all_values, all_groups, alpha=alpha)
+            post_hoc_result = post_hoc.summary().as_text()
+
+        elif post_hoc_method == 'dunn':
+            post_hoc_result = posthoc_dunn(all_values, groups=all_groups, p_adjust='bonferroni').to_string()
+
+        elif post_hoc_method == 'games-howell':
+            post_hoc_result = pg.pairwise_gameshowell(dv='value', between='group', data=df).to_string()
+
+        elif post_hoc_method == 'scheffe':
+            post_hoc_result = pg.pairwise_ttests(dv='value', between='group', method='scheffe', data=df).to_string()
+
+        elif post_hoc_method == 'dunnett':
+            post_hoc_result = pg.pairwise_ttests(dv='value', between='group', padjust='dunnett', data=df).to_string()
+
+        else:
+            raise ValueError(f"Unknown post-hoc method: {post_hoc_method}")
+    else:
+        post_hoc_result = 'No significant differences found'
+
+    return {
+        'ANOVA': anova_result,
+        'Normality': normality_results,
+        'Homogeneity of variances': levene_p,
+        'Post-hoc test': post_hoc_result,
+    }
+
+def test_one_way_anova():
+    import numpy as np
+
+    # Test 1: Balanced groups, normal distribution, equal variances
+    print("\nTest 1: Balanced groups, Tukey's HSD")
+    data_balanced = [
+        [10.1, 9.5, 10.8, 9.9, 10.0],  # Group A
+        [12.3, 11.7, 12.0, 11.5, 12.1],  # Group B
+        [15.2, 14.8, 15.5, 14.9, 15.1],  # Group C
+    ]
+    group_names = ['A', 'B', 'C']
+    result_balanced = one_way_anova(data_balanced, group_names, post_hoc_method='tukey')
+    assert 'ANOVA' in result_balanced, "ANOVA results missing"
+    assert 'Post-hoc test' in result_balanced, "Post-hoc results missing"
+    print(result_balanced)
+
+    # Test 2: Dunn's Test for nonparametric data
+    print("\nTest 2: Nonparametric data, Dunn's Test")
+    data_nonparametric = [
+        [10, 12, 100],  # Group A (with an outlier)
+        [9, 11, 14],    # Group B
+        [10, 12, 15],   # Group C
+    ]
+    result_dunn = one_way_anova(data_nonparametric, group_names, post_hoc_method='dunn')
+    assert 'ANOVA' in result_dunn, "ANOVA results missing"
+    print(result_dunn)
+
+    # Test 3: Unequal variances
+    print("\nTest 3: Unequal variances, Tukey's HSD")
+    data_unequal_variances = [
+        [10.1, 9.5, 10.8, 9.9, 10.0],      # Group A
+        [12.3, 11.7, 12.0, 11.5, 12.1],    # Group B
+        [15.2, 50.0, 15.5, 14.9, 15.1],    # Group C (higher variance)
+    ]
+    result_unequal_var = one_way_anova(data_unequal_variances, group_names, post_hoc_method='tukey')
+    assert 'Suggestion' in result_unequal_var, "Suggestion missing for unequal variances"
+    print(result_unequal_var)
+
+    # Test 4: Missing values
+    print("\nTest 4: Missing values")
+    data_missing = [
+        [10.1, 9.5, 10.8, np.nan, 10.0],  # Group A
+        [12.3, 11.7, 12.0, 11.5, np.nan], # Group B
+        [15.2, 14.8, 15.5, 14.9, 15.1],  # Group C
+    ]
+    result_missing = one_way_anova(data_missing, group_names)
+    assert 'ANOVA' in result_missing, "ANOVA results missing"
+    print(result_missing)
+
+    # Test 5: Games-Howell Test (Placeholder)
+    print("\nTest 5: Games-Howell Test")
+    
+    result_games_howell = one_way_anova(data_balanced, group_names, post_hoc_method='games-howell')
+    assert 'Post-hoc test' in result_games_howell, "Post-hoc results missing for Games-Howell"
+    print(result_games_howell)
+
+
+    # Test 6: Non-normal data
+    print("\nTest 6: Non-normal data")
+    data_non_normal = [
+        [10, 9, 10, 8, 9],  # Group A
+        [20, 21, 19, 22, 20],  # Group B
+        [30, 40, 35, 50, 45],  # Group C (not normal)
+    ]
+    result_non_normal = one_way_anova(data_non_normal, group_names, post_hoc_method='dunn')
+    assert 'Suggestion' in result_non_normal, "Suggestion missing for non-normal data"
+    print(result_non_normal)
+
+    print("\nAll tests completed successfully.")
+
+def one_factor_repeated_anova(*groups):
+    """
+    Perform a one-factor repeated measures ANOVA with assumption checks.
+
+    Parameters:
+        *groups: Variable number of arrays or lists representing repeated measures data.
+
+    Returns:
+        Dictionary with results of assumption checks and ANOVA summary.
+    """
+    # Check input consistency
+    if len(groups) < 2:
+        raise ValueError("At least two groups are required for repeated measures ANOVA.")
+
+    n_subjects = len(groups[0])
+    if not all(len(group) == n_subjects for group in groups):
+        raise ValueError("All groups must have the same number of observations (balanced design).")
+
+    # Convert data into a long-form DataFrame
+    data = pd.DataFrame({f"Group_{i+1}": group for i, group in enumerate(groups)})
+    data["Subject"] = np.arange(1, n_subjects + 1)
+    data_long = data.melt(id_vars="Subject", var_name="Condition", value_name="Score")
+
+    # Check for normality (Shapiro-Wilk test for each group)
+    normality_results = {col: shapiro(data[col]).pvalue for col in data.columns if col != "Subject"}
+    normality_passed = all(p > 0.05 for p in normality_results.values())
+
+    # Check for sphericity (Mauchly's test using Pingouin)
+    sphericity_res = sphericity(data_long, dv="Score", subject="Subject", within="Condition")
+    sphericity_passed = sphericity_res.pval > 0.05;
+
+    # Perform repeated measures ANOVA
+    anova_results = pg.rm_anova(data=data_long, dv="Score", within="Condition", subject="Subject")
+
+    # Perform post hoc analysis (pairwise comparisons)
+    post_hoc_results = pg.pairwise_ttests(
+        data=data_long,
+        dv="Score",
+        within="Condition",
+        subject="Subject",
+        padjust="bonferroni"  # Use Bonferroni correction for multiple comparisons
+    )
+
+    # Power analysis for each post hoc comparison
+    power_results = []
+    power_analysis = TTestPower()
+
+    for index, row in post_hoc_results.iterrows():
+        # Calculate Cohen's d for each comparison using t-statistic and sample size
+        t_stat = row['T']
+        effect_size_d = t_stat / np.sqrt(n_subjects)
+        
+        # Perform power analysis using the Cohen's d for each pairwise comparison
+        power = power_analysis.solve_power(effect_size=effect_size_d, nobs=n_subjects, alpha=0.05)
+        
+        power_results.append({
+            "Contrast": f"{row['A']} vs {row['B']}",
+            "T-statistic": t_stat,
+            "Effect Size (Cohen's d)": effect_size_d,
+            "Power": power
+        })
+
+    # Return results
+    return {
+        "Normality Results (Shapiro-Wilk)": normality_results,
+        "Normality Passed": normality_passed,
+        "Sphericity Test (Mauchly)": {
+            "p-value": sphericity_res.pval,
+            "Passed": sphericity_passed
+        },
+        "ANOVA Summary": anova_results,
+        "Post Hoc Results": post_hoc_results,
+        "power_results": power_results,
+    }
+
+
 
 def levene_test(*groups, alpha = 0.05):
     """
@@ -153,33 +414,6 @@ def kruskal_wallis_with_posthoc(*groups):
     return result
 
 
-def perform_t_test(group_1, group_2, paired=False):
-    """
-    Perform a t-test between two groups.
-
-    Parameters:
-    - group_1: list or array-like, first group of data
-    - group_2: list or array-like, second group of data
-    - paired: bool, default=False. If True, performs a paired t-test.
-    
-    Returns:
-    - t_stat: float, the t-statistic
-    - p_value: float, the p-value
-    """
-    from scipy.stats import ttest_ind, ttest_rel
-
-    if paired:
-        # Paired t-test
-        if len(group_1) != len(group_2):
-            raise ValueError("For a paired t-test, both groups must have the same length.")
-        t_stat, p_value = ttest_rel(group_1, group_2)
-    else:
-        # Independent t-test
-        t_stat, p_value = ttest_ind(group_1, group_2, equal_var=False)  # Welch's t-test
-    
-    return t_stat, p_value
-
-
 def perform_ANOVA_tests(*groups):
     """
     Perform various statistical tests on the given datasets.
@@ -280,262 +514,47 @@ from statsmodels.stats.anova import AnovaRM
 from pingouin import sphericity
 from pingouin import sphericity, pairwise_ttests, power_rm_anova
 
-def one_factor_repeated_anova(*groups):
-    """
-    Perform a one-factor repeated measures ANOVA with assumption checks.
-
-    Parameters:
-        *groups: Variable number of arrays or lists representing repeated measures data.
-
-    Returns:
-        Dictionary with results of assumption checks and ANOVA summary.
-    """
-    # Check input consistency
-    if len(groups) < 2:
-        raise ValueError("At least two groups are required for repeated measures ANOVA.")
-
-    n_subjects = len(groups[0])
-    if not all(len(group) == n_subjects for group in groups):
-        raise ValueError("All groups must have the same number of observations (balanced design).")
-
-    # Convert data into a long-form DataFrame
-    data = pd.DataFrame({f"Group_{i+1}": group for i, group in enumerate(groups)})
-    data["Subject"] = np.arange(1, n_subjects + 1)
-    data_long = data.melt(id_vars="Subject", var_name="Condition", value_name="Score")
-
-    # Check for normality (Shapiro-Wilk test for each group)
-    normality_results = {col: shapiro(data[col]).pvalue for col in data.columns if col != "Subject"}
-    normality_passed = all(p > 0.05 for p in normality_results.values())
-
-    # Check for sphericity (Mauchly's test using Pingouin)
-    sphericity_res = sphericity(data_long, dv="Score", subject="Subject", within="Condition")
-    sphericity_passed = sphericity_res.pval > 0.05;
-
-    # Perform repeated measures ANOVA
-    anova_results = pg.rm_anova(data=data_long, dv="Score", within="Condition", subject="Subject")
-
-    # Perform post hoc analysis (pairwise comparisons)
-    post_hoc_results = pg.pairwise_ttests(
-        data=data_long,
-        dv="Score",
-        within="Condition",
-        subject="Subject",
-        padjust="bonferroni"  # Use Bonferroni correction for multiple comparisons
-    )
-
-    # Power analysis for each post hoc comparison
-    power_results = []
-    power_analysis = TTestPower()
-
-    for index, row in post_hoc_results.iterrows():
-        # Calculate Cohen's d for each comparison using t-statistic and sample size
-        t_stat = row['T']
-        effect_size_d = t_stat / np.sqrt(n_subjects)
-        
-        # Perform power analysis using the Cohen's d for each pairwise comparison
-        power = power_analysis.solve_power(effect_size=effect_size_d, nobs=n_subjects, alpha=0.05)
-        
-        power_results.append({
-            "Contrast": f"{row['A']} vs {row['B']}",
-            "T-statistic": t_stat,
-            "Effect Size (Cohen's d)": effect_size_d,
-            "Power": power
-        })
-
-    # Return results
-    return {
-        "Normality Results (Shapiro-Wilk)": normality_results,
-        "Normality Passed": normality_passed,
-        "Sphericity Test (Mauchly)": {
-            "p-value": sphericity_res.pval,
-            "Passed": sphericity_passed
-        },
-        "ANOVA Summary": anova_results,
-        "Post Hoc Results": post_hoc_results,
-        "power_results": power_results,
-    }
-
-### Defining the "More Affected Midstance" values for each mode (Stance & Swing, Stance, Swing)
-print('## repeated ANOVA assistance mode effect on knee extension angle of More Affected side in Midstance')
-stanceswing = [0.5, 8.0, 8.2, 9.3, 11.0, 19.5, 36.7]    # Stance & Swing
-stance = [-5.3, 1.4, 8.1, 8.9, 6.2, 17.1, 18.4]         # Stance
-swing = [-8.8, 2.5, 5.7, 1.4, -2.5, 5.1, 7.6]           # Swing
-# perform_ANOVA_tests(stanceswing, stance, swing)
-
-res = one_factor_repeated_anova(stanceswing, stance, swing)
-print(res)
-
-# # Reduction in Crouch: θ Initial Contact (°) More Affected
-print('## assistance mode effect on knee extension angle of More Affected side in Initial Contact')
-stanceswing = [0.4,7.3,3.3,5.4,10.7,8.5,11.7]   # Stance & Swing
-stance = [-1.9,2.8,1.8,0.9,-0.5,6.0,0.3]        # Stance
-swing = [-12.5,11.8,-2.6,3.9,5.7,15.6,10.6]     # Swing
-#perform_ANOVA_tests(stanceswing, stance, swing)
-res = one_factor_repeated_anova(stanceswing, stance, swing)
-print(res)
-
-# # Reduction in Crouch: θ Initial Contact (°) less affected
-print('## assistance mode effect on knee extension angle of Less Affected side in Initial Contact')
-stanceswing = [0.5,10.2,2.8,6.7,-2.1,8.8,19.3]   # Stance & Swing
-stance = [-7.3,-4.3,-3.3,1.9,-11.0,1.9,-0.7]        # Stance
-swing = [-6.7,6.1,3.8,10.8,-0.5,5.6,10.9,]     # Swing
-# perform_ANOVA_tests(stanceswing, stance, swing)
-res = one_factor_repeated_anova(stanceswing, stance, swing)
-print(res)
 
 
-# # Reduction in Crouch: θ Midstance (°) less affected
-print('## assistance mode effect on knee extension angle of Less Affected side in Midstance')
-stanceswing = [-6.2,5.2,5.6,8.9,8.6,6.9,11.5]   # Stance & Swing
-stance = [-7.6,2.0,6.0,15.0,7.1,5.0,15.3]        # Stance
-swing = [-12.4,5.2,-7.6,3.5,-2.3,-0.4,2.7]     # Swing
-# perform_ANOVA_tests(stanceswing, stance, swing)
-res = one_factor_repeated_anova(stanceswing, stance, swing)
-print(res)
+test_one_way_anova()
+# ### Defining the "More Affected Midstance" values for each mode (Stance & Swing, Stance, Swing)
+# print('## repeated ANOVA assistance mode effect on knee extension angle of More Affected side in Midstance')
+# stanceswing = [0.5, 8.0, 8.2, 9.3, 11.0, 19.5, 36.7]    # Stance & Swing
+# stance = [-5.3, 1.4, 8.1, 8.9, 6.2, 17.1, 18.4]         # Stance
+# swing = [-8.8, 2.5, 5.7, 1.4, -2.5, 5.1, 7.6]           # Swing
+# # perform_ANOVA_tests(stanceswing, stance, swing)
+
+# res = one_factor_repeated_anova(stanceswing, stance, swing)
+# print(res)
+
+# # # Reduction in Crouch: θ Initial Contact (°) More Affected
+# print('## assistance mode effect on knee extension angle of More Affected side in Initial Contact')
+# stanceswing = [0.4,7.3,3.3,5.4,10.7,8.5,11.7]   # Stance & Swing
+# stance = [-1.9,2.8,1.8,0.9,-0.5,6.0,0.3]        # Stance
+# swing = [-12.5,11.8,-2.6,3.9,5.7,15.6,10.6]     # Swing
+# #perform_ANOVA_tests(stanceswing, stance, swing)
+# res = one_factor_repeated_anova(stanceswing, stance, swing)
+# print(res)
+
+# # # Reduction in Crouch: θ Initial Contact (°) less affected
+# print('## assistance mode effect on knee extension angle of Less Affected side in Initial Contact')
+# stanceswing = [0.5,10.2,2.8,6.7,-2.1,8.8,19.3]   # Stance & Swing
+# stance = [-7.3,-4.3,-3.3,1.9,-11.0,1.9,-0.7]        # Stance
+# swing = [-6.7,6.1,3.8,10.8,-0.5,5.6,10.9,]     # Swing
+# # perform_ANOVA_tests(stanceswing, stance, swing)
+# res = one_factor_repeated_anova(stanceswing, stance, swing)
+# print(res)
+
+
+# # # Reduction in Crouch: θ Midstance (°) less affected
+# print('## assistance mode effect on knee extension angle of Less Affected side in Midstance')
+# stanceswing = [-6.2,5.2,5.6,8.9,8.6,6.9,11.5]   # Stance & Swing
+# stance = [-7.6,2.0,6.0,15.0,7.1,5.0,15.3]        # Stance
+# swing = [-12.4,5.2,-7.6,3.5,-2.3,-0.4,2.7]     # Swing
+# # perform_ANOVA_tests(stanceswing, stance, swing)
+# res = one_factor_repeated_anova(stanceswing, stance, swing)
+# print(res)
 
 
 
-# ## ===========================================
-# print('## ===========================================')
-# print('## ===========================================')
-# print('## ===========================================')
-# import numpy as np
-# from scipy.stats import shapiro, levene, ttest_rel, wilcoxon
-
-# def compare_twodata(data):
-#     """
-
-#     Compares the 'First' and 'Last' columns of multiple cases in the input data.
-#     Performs normality tests, variance equality tests, and selects the appropriate statistical test.
-    
-#     Parameters:
-#         data (dict): Dictionary where each key is a case name and the values are dictionaries
-#                      with 'First' and 'Last' columns as lists of numeric values.
-                     
-#     Returns:
-#         dict: Results of statistical tests for each case (Shapiro-Wilk, Levene, t-test/Wilcoxon).
-#     """
-
-#     results = {}
-
-#     # Perform analysis for each case
-#     for case, values in data.items():
-#         first = np.array(values["First"])
-#         last = np.array(values["Last"])
-
-#         # Check normality using Shapiro-Wilk test
-#         shapiro_first = shapiro(first).pvalue
-#         shapiro_last = shapiro(last).pvalue
-
-#         # Check variance equality using Levene's test if normality is assumed
-#         if shapiro_first > 0.05 and shapiro_last > 0.05:
-#             levene_pvalue = levene(first, last).pvalue
-#             normal = True
-#         else:
-#             levene_pvalue = None
-#             normal = False
-
-#         # Perform the appropriate test
-#         if normal and levene_pvalue and levene_pvalue > 0.05:
-#             # If both are normal and variances are equal, use paired t-test
-#             test_stat, pvalue = ttest_rel(first, last)
-#             test_used = "t-test"
-#         else:
-#             # If normality or variance equality is not met, use Wilcoxon signed-rank test
-#             test_stat, pvalue = wilcoxon(first, last)
-#             test_used = "Wilcoxon"
-
-#         # Store results for each case
-#         results[case] = {
-#             "Shapiro First (p)": shapiro_first,
-#             "Shapiro Last (p)": shapiro_last,
-#             "Levene (p)": levene_pvalue,
-#             "Test Used": test_used,
-#             "Test Statistic": test_stat,
-#             "p-value": pvalue
-#         }
-
-#     # Print the results
-#     results_df = pd.DataFrame(results).T
-#     print(results_df)
-#     return results
-
-
-# Midstance = {
-#     "exoMidstanceMoreAffected": {
-#         "First": [37.0, 10.6, 28.3, 28.0, 21.9, 17.9, 3.9],
-#         "Last": [29.1, 11.3, 23.1, 22.9, 14.2, 13.2, -3.8]
-#     },
-#     "exoMidstanceLessAffected": {
-#         "First": [31.0, 2.8, 14.8, 24.2, 15.3, -1.4, 2.4],
-#         "Last": [33.4, -3.4, 18.5, 19.3, 11.5, 5.1, 0.4]
-#     },
-#     "baseMidstanceMoreAffected": {
-#         "First": [31.4, 17.8, 26.5, 28.3, 42.6, 30.8, 23.8],
-#         "Last": [29.7, 19.4, 31.4, 30.7, 25.2, 26.5, 35.8]
-#     },
-#     "baseMidstanceLessAffected": {
-#         "First": [28.6, 6.1, 17.4, 25.2, 29.8, -2.6, 7.2],
-#         "Last": [27.2, 1.8, 24.1, 27.4, 20.1, 2.5, 12.5]
-#     }
-# }
-
-# # Call the function with the data
-# results = compare_twodata(Midstance)
-
-
-# Initial = {
-#     "exoInitialMoreAffected": {
-#         "First": [39.7, 25.0, 34.1, 33.8, 35.4, 32.9, 33.6],
-#         "Last": [31.2, 22.8, 33.5, 30.1, 27.5, 29.1, 41.1]
-#     },
-#     "exoInitialLessAffected": {
-#         "First": [38.7, 8.7, 26.5, 37.6, 33.4, 24.8, 27.7],
-#         "Last": [32.1, 11.1, 31.2, 26.2, 30.5, 34.5, 16.4]
-#     },
-#     "baseInitialMoreAffected": {
-#         "First": [30.7, 29.0, 30.5, 29.2, 51.7, 49.7, 48.9],
-#         "Last": [31.6, 30.1, 36.8, 33.7, 38.2, 46.1, 50.7]
-#     },
-#     "baseInitialLessAffected": {
-#         "First": [31.0, 21.0, 25.2, 26.7, 44.2, 27.6, 26.8],
-#         "Last": [32.5, 21.3, 33.9, 31.1, 28.4, 37.2, 27.8]
-#     }
-# }
-
-# # Call the function with the data
-# results = compare_twodata(Initial)
-
-# stepLength = {
-#     "case1": {
-#         "First": [0.05, 0.45, 0.18, 0.25, 0.22, 0.41, 0.28],
-#         "Last": [0.09, 0.43, 0.35, 0.45, 0.28, 0.49, 0.34]
-#     },
-#     "case2": {
-#         "First": [0.19, 0.39, 0.34, 0.47, 0.25, 0.46, 0.29],
-#         "Last": [0.35, 0.43, 0.39, 0.57, 0.29, 0.49, 0.17]
-#     },
-#     "case3": {
-#         "First": [0.30, 0.50, 0.30, 0.40, 0.30, 0.40, 0.40],
-#         "Last": [0.30, 0.60, 0.30, 0.50, 0.30, 0.30, 0.30]
-#     },
-#     "case4": {
-#         "First": [0.40, 0.50, 0.40, 0.60, 0.30, 0.40, 0.40],
-#         "Last": [0.40, 0.50, 0.40, 0.60, 0.30, 0.40, 0.30]
-#     }
-# }
-# results = compare_twodata(stepLength)
-
-
-# gaitSpeed = {
-#     "case1": {
-#         "First": [0.16, 0.66, 0.48, 0.78, 0.42, 0.88, 0.52],
-#         "Last": [0.37, 0.75, 0.73, 1.04, 0.57, 1.28, 0.40]
-#     },
-#     "case2": {
-#         "First": [0.60, 1.00, 0.60, 1.00, 0.50, 0.80, 0.70],
-#         "Last": [0.60, 0.90, 0.60, 1.10, 0.60, 0.80, 0.50]
-#     }
-# }
-# results = compare_twodata(gaitSpeed)
 

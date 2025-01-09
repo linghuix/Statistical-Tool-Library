@@ -228,7 +228,7 @@ def independent_t_test(x, y, alpha=0.05):
     # print('p_levene', p_levene, equal_variance)
 
     # Perform the independent t-test
-    t_stat, p_value = ttest_ind(x, y, equal_var=equal_variance)
+    t_stat, p_value = ttest_ind(x, y, equal_var=equal_variance) # if its unequal variance, use Welch's t-test
 
     # Calculate effect size (Cohen's d)
     mean_diff = np.mean(x) - np.mean(y)

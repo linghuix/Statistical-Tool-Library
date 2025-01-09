@@ -72,6 +72,56 @@ def normality_test(data, method="all"):
 
     return results
 
+# equality of variances.
+def levene_test(*groups, alpha = 0.05):
+    """
+    Perform Levene's test for equality of variances.
+
+    Parameters:
+    *groups: Two or more arrays of data points (representing different groups).
+
+    Returns:
+    statistic: Levene test statistic.
+    p_value: P-value associated with the test.
+    """
+    # Perform the Levene test
+    statistic, p_value = levene(*groups)
+    print('statistic, p_value = ', statistic, p_value)
+
+    # Decision based on P-value
+    if p_value < alpha:
+        print("Reject the null hypothesis: The variances are not equal (heteroscedastic).")
+    else:
+        print("Fail to reject the null hypothesis: The variances are equal (homoscedastic).")
+
+    # Return the statistic and p-value
+    return statistic, p_value
+
+def bartlett_test(*groups, alpha = 0.05):
+    """
+    Perform Bartlett's test for equality of variances.
+
+    Parameters:
+    *groups: Two or more arrays of data points (representing different groups).
+
+    Returns:
+    statistic: Bartlett test statistic.
+    p_value: P-value associated with the test.
+    """
+    from scipy.stats import bartlett
+
+    # Perform the Bartlett test
+    statistic, p_value = bartlett(*groups)
+    print('statistic, p_value = ', statistic, p_value)
+
+    # Decision based on P-value
+    if p_value < alpha:
+        print("Reject the null hypothesis: The variances are not equal (heteroscedastic).")
+    else:
+        print("Fail to reject the null hypothesis: The variances are equal (homoscedastic).")
+
+    # Return the statistic and p-value
+    return statistic, p_value
 
 
 if __name__ == "__main__":
