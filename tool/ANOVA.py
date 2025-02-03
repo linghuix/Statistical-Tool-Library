@@ -203,9 +203,180 @@ def test_one_way_anova():
 
     print("\nAll tests completed successfully.")
 
+
+
+import numpy as np
+import pandas as pd
+from scipy.stats import kruskal
+from statsmodels.stats.multitest import multipletests
+from scikit_posthocs import posthoc_dunn
+import pingouin as pg
+
+
+def kruskal_wallis_test(data, group_names=None, alpha=0.05, post_hoc_method='dunn', power_analysis=False):
+    """
+    Perform Kruskal-Wallis test, optional post-hoc analysis, and optional power analysis.
+    non-parametric statistical test used to compare the distributions of more than two independent groups. 
+    It is used when the assumptions of one-way ANOVA (such as normality) are not met. 
+
+    Parameters:
+        data (list of lists): A list where each inner list represents data for a group.
+        group_names (list): Names of the groups (default: None).
+        alpha (float): Significance level (default: 0.05).
+        post_hoc_method (str): Post-hoc method ('dunn').
+        power_analysis (bool): Whether to perform power analysis (default: False).
+
+    Returns:
+        dict: A dictionary with the Kruskal-Wallis result, post-hoc results (if applicable), and power analysis results (if applicable).
+    """
+    # Convert to numpy arrays for easier processing
+    group_data = [np.array(group)[~np.isnan(group)] for group in data]
+    num_groups = len(group_data)
+    group_names = group_names if group_names else [f"Group {i+1}" for i in range(num_groups)]
+
+    # Perform Kruskal-Wallis test
+    h_stat, p_value = kruskal(*group_data)
+    kw_result = {'H-statistic': h_stat, 'p-value': p_value}
+
+    # Post-hoc test if Kruskal-Wallis shows significance
+    if p_value < alpha and post_hoc_method == 'dunn':
+        all_values = np.concatenate(group_data)
+        all_groups = np.concatenate([[name] * len(group) for name, group in zip(group_names, group_data)])
+
+        # Perform Dunn's test with Bonferroni correction
+        post_hoc_result = posthoc_dunn(all_values, groups=all_groups, p_adjust='bonferroni')
+    else:
+        post_hoc_result = 'No significant differences found or unknown post-hoc method.'
+
+    # Power analysis
+    power_result = None
+    if power_analysis:
+        # Convert data to a DataFrame for Pingouin
+        all_values = np.concatenate(group_data)
+        all_groups = np.concatenate([[name] * len(group) for name, group in zip(group_names, group_data)])
+        df = pd.DataFrame({'value': all_values, 'group': all_groups})
+
+        # Calculate effect size and perform power analysis
+        effect_size = pg.compute_effsize(df, dv='value', between='group', eftype='cohen')
+        total_n = len(all_values)
+        power = pg.power_anova(eta=effect_size, n=total_n, k=num_groups, alpha=alpha)
+        power_result = {'Effect size (Cohen f)': effect_size, 'Power': power}
+
+    return {
+        'Kruskal-Wallis': kw_result,
+        'Post-hoc test': post_hoc_result if isinstance(post_hoc_result, str) else post_hoc_result.to_string(),
+        'Power analysis': power_result
+    }
+
+# Example usage:
+#data = [
+#    [5, 7, 8, 6],
+#    [8, 9, 7, 10],
+#    [2, 4, 3, 5]
+#]
+#result = kruskal_wallis_test(data, group_names=['A', 'B', 'C'], power_analysis=True)
+
+
+import numpy as np
+import pandas as pd
+from scipy.stats import f_oneway
+from statsmodels.stats.multitest import multipletests
+import pingouin as pg
+from statsmodels.stats.power import FTestAnovaPower
+
+def welch_anova(data, group_names=None, alpha=0.05, post_hoc_method='games-howell', power_analysis=False):
+    """
+    Perform Welch ANOVA, check requirements, conduct post-hoc tests if significant, and perform power analysis.
+    The Welch ANOVA (also known as Welch's test) is an adaptation of the standard one-way ANOVA that is used 
+    when the assumptions of equal variances (homogeneity of variance) across groups are violated.
+
+    Parameters:
+        data (list of lists): A list where each inner list represents data for a group.
+        group_names (list): Names of the groups (default: None).
+        alpha (float): Significance level (default: 0.05).
+        post_hoc_method (str): Post-hoc method ('games-howell').
+        power_analysis (bool): Whether to perform power analysis (default: False).
+
+    Returns:
+        dict: A dictionary with Welch ANOVA results, assumption checks, post-hoc results (if applicable), and power analysis results (if applicable).
+    """
+    # Convert to numpy arrays for easier processing
+    group_data = [np.array(group)[~np.isnan(group)] for group in data]
+    group_names = group_names if group_names else [f"Group {i+1}" for i in range(len(group_data))]
+    
+    # Convert data into a pandas DataFrame for Pingouin
+    all_values = np.concatenate(group_data)
+    all_groups = np.concatenate([[name] * len(group) for name, group in zip(group_names, group_data)])
+    df = pd.DataFrame({'value': all_values, 'group': all_groups})
+    
+    # Perform Welch ANOVA using Pingouin
+    welch_result = pg.welch_anova(dv='value', between='group', data=df)
+    
+    # Assumption checks
+    # Check if data is approximately normally distributed using Shapiro-Wilk test
+    normality_results = {name: pg.normality(df[df['group'] == name]['value']).iloc[0, 1] for name in group_names}
+    normality_passed = all(p > alpha for p in normality_results.values())
+
+    # Check if variances are unequal using Levene's Test
+    levene_p = pg.homoscedasticity(data=df, dv='value', group='group').iloc[0, 1]
+    homogeneity_passed = levene_p > alpha
+
+    # Suggestions based on assumptions
+    suggestions = []
+    if not normality_passed:
+        suggestions.append("Data is not normally distributed. Consider using non-parametric tests like Kruskal-Wallis.")
+    if homogeneity_passed:
+        suggestions.append("Homogeneity of variances assumption is met. Consider using standard one-way ANOVA.")
+
+    # Post-hoc test if Welch ANOVA shows significance
+    if welch_result['p-unc'][0] < alpha and post_hoc_method == 'games-howell':
+        post_hoc_result = pg.pairwise_gameshowell(dv='value', between='group', data=df).to_string()
+    else:
+        post_hoc_result = 'No significant differences found or unknown post-hoc method.'
+
+    # Power analysis
+    power_result = None
+    if power_analysis:
+        # Compute effect size (eta-squared)
+        ss_between = welch_result['SS_between'][0]
+        ss_total = welch_result['SS_total'][0]
+        eta_squared = ss_between / ss_total
+
+        # Calculate average group size
+        avg_group_size = np.mean([len(group) for group in group_data])
+
+        # Perform power analysis
+        analysis = FTestAnovaPower()
+        power = analysis.solve_power(effect_size=np.sqrt(eta_squared), nobs=avg_group_size * len(group_data), alpha=alpha, k_groups=len(group_data))
+        
+        power_result = {
+            'Effect size (eta-squared)': eta_squared,
+            'Power': power,
+            'Note': 'Power analysis assumes approximate robustness for Welch ANOVA.'
+        }
+
+    return {
+        'Welch ANOVA': welch_result.to_dict('records'),
+        'Normality': normality_results,
+        'Homogeneity of variances': levene_p,
+        'Suggestions': suggestions,
+        'Post-hoc test': post_hoc_result,
+        'Power analysis': power_result
+    }
+
+
+
+
 def one_factor_repeated_anova(*groups):
     """
     Perform a one-factor repeated measures ANOVA with assumption checks.
+
+    The One-Factor Repeated Measures ANOVA is a statistical test used to analyze data 
+    when the same subjects are exposed to different conditions or treatments, and 
+    the factor being tested is one (hence "one-factor"). 
+    It compares the means of these conditions to determine 
+    if there are statistically significant differences in a repeated measure scenario 
+    (i.e., measurements taken from the same subjects multiple times).
 
     Parameters:
         *groups: Variable number of arrays or lists representing repeated measures data.
@@ -276,6 +447,94 @@ def one_factor_repeated_anova(*groups):
         "ANOVA Summary": anova_results,
         "Post Hoc Results": post_hoc_results,
         "power_results": power_results,
+    }
+
+
+
+import numpy as np
+import pandas as pd
+from scipy.stats import friedmanchisquare, wilcoxon
+from statsmodels.stats.multitest import multipletests
+from statsmodels.stats.power import FTestPower
+
+def friedman_test(data, subject_ids=None, condition_names=None, alpha=0.05):
+    """
+    Perform the Friedman test for repeated measures, post-hoc analysis if significant, and calculate power.
+
+    The Friedman Test is a non-parametric statistical test used to detect differences in treatments 
+    across multiple test attempts. It is the non-parametric counterpart to the One-Way Repeated Measures ANOVA 
+    and is used especially when the assumptions of normality for repeated measures ANOVA are not met.
+
+    Parameters:
+        data (list of lists): A list where each inner list represents data for a condition.
+        subject_ids (list): List of subject identifiers (optional).
+        condition_names (list): Names of the conditions (optional).
+        alpha (float): Significance level (default: 0.05).
+
+    Returns:
+        dict: Results of the Friedman test, post-hoc analysis (if applicable), and power analysis.
+    """
+    # Number of conditions
+    num_conditions = len(data)
+
+    if condition_names is None:
+        condition_names = [f"Condition {i+1}" for i in range(num_conditions)]
+
+    if subject_ids is None:
+        subject_ids = [f"Subject {i+1}" for i in range(len(data[0]))]
+
+    # Check input dimensions
+    if any(len(group) != len(subject_ids) for group in data):
+        raise ValueError("All conditions must have the same number of subjects.")
+
+    # Perform the Friedman test
+    stat, p_value = friedmanchisquare(*data)
+    friedman_result = {
+        'Test Statistic': stat,
+        'p-value': p_value
+    }
+
+    # Calculate effect size (Kendall's W)
+    num_subjects = len(subject_ids)
+    sum_ranks = np.sum([np.mean(group) for group in data])
+    kendalls_w = stat / (num_subjects * (num_conditions - 1))
+
+    # Power analysis
+    power_analysis = FTestPower()
+    effect_size = np.sqrt(kendalls_w / (1 - kendalls_w)) if kendalls_w < 1 else 0.0
+    power = power_analysis.solve_power(effect_size=effect_size, df_num=num_conditions - 1, df_denom=(num_subjects - 1) * (num_conditions - 1), alpha=alpha)
+    power_result = {
+        'Effect Size (Kendall\'s W)': kendalls_w,
+        'Power': power
+    }
+
+    # Post-hoc pairwise comparisons if the test is significant
+    if p_value < alpha:
+        pairwise_results = []
+        for i in range(num_conditions):
+            for j in range(i + 1, num_conditions):
+                stat, p = wilcoxon(data[i], data[j])
+                pairwise_results.append({
+                    'Comparison': f"{condition_names[i]} vs {condition_names[j]}",
+                    'W-statistic': stat,
+                    'p-value': p
+                })
+
+        # Adjust p-values for multiple comparisons
+        p_values = [res['p-value'] for res in pairwise_results]
+        adjusted = multipletests(p_values, alpha=alpha, method='bonferroni')
+        for res, adj_p in zip(pairwise_results, adjusted[1]):
+            res['Adjusted p-value'] = adj_p
+
+        post_hoc_result = pairwise_results
+    else:
+        post_hoc_result = "No significant differences found."
+
+    # Compile results
+    return {
+        'Friedman Test': friedman_result,
+        'Post-hoc Analysis': post_hoc_result,
+        'Power Analysis': power_result
     }
 
 

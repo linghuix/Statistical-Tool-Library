@@ -111,11 +111,14 @@ def paired_t_test(x, y, alpha=0.05):
     diff_mean = np.mean(differences)
     diff_std = np.std(differences, ddof=1)
     effect_size = diff_mean / diff_std if diff_std != 0 else 0  # Cohen's d for paired samples
-    n = len(differences)
+    currentSampleSize = len(differences)
 
     # Use statsmodels for power analysis
     power_analysis = TTestPower()
-    power = power_analysis.solve_power(effect_size=effect_size, nobs=n, alpha=alpha, alternative="two-sided")
+    power = power_analysis.solve_power(effect_size=effect_size, nobs=currentSampleSize, alpha=alpha, alternative="two-sided")
+    
+    # Calculate the required sample size for power = 0.8
+    required_sample_size = power_analysis.solve_power(effect_size=effect_size, power=0.8, alpha=0.05, alternative='two-sided')
 
     results = {
         "t_stat": t_stat,
@@ -123,6 +126,7 @@ def paired_t_test(x, y, alpha=0.05):
         "p_normality": p_normality,
         "normality_passed": normality_passed,
         "power": power,
+        "required_sample_size": required_sample_size,
         "effect_size": effect_size,
         "suggestion": None,
     }
@@ -240,6 +244,9 @@ def independent_t_test(x, y, alpha=0.05):
     power_analysis = TTestIndPower()
     power = power_analysis.solve_power(effect_size=effect_size, nobs1=n1, ratio=n2 / n1, alpha=alpha, alternative="two-sided")
 
+    # Calculate the required sample size for power = 0.8
+    required_sample_size = power_analysis.solve_power(effect_size=effect_size, power=0.8, alpha=0.05, ratio=n2 / n1, alternative='two-sided')
+
     results = {
         "t_stat": t_stat,
         "p_value": p_value,
@@ -251,6 +258,7 @@ def independent_t_test(x, y, alpha=0.05):
         "equal_variance": equal_variance,
         "power": power,
         "effect_size": effect_size,
+        "required_sample_size": required_sample_size,
         "suggestion": None,
     }
 
@@ -341,36 +349,58 @@ def test_independent_t_test():
 if __name__ == "__main__":
     # Run the test function
     test_independent_t_test()
+    
+    #  i Muscle Activity Soleus
+    before_Assist = [0.395, 0.39, 0.345, 0.26, 0.29];  # Variance before assistance
+    After_Assist = [0.38, 0.33, 0.32, 0.19, 0.21];    # Variance after assistance   
+    res = paired_t_test(before_Assist, After_Assist)
+    print(res)
+    #res = independent_t_test(before_Assist, After_Assist)
+    #print(res)
+
+    #  Muscle Activity Soleus Variance Ratio
+    before_Assist = [0.095, 0.18, 0.1, 0.125, 0.06];  # Variance before assistance
+    After_Assist = [0.1, 0.245, 0.15, 0.16, 0.07];    # Varia
+    res = paired_t_test(before_Assist, After_Assist)
+    print(res)
 
 
-    Midstance = {
-        "exoMidstanceMoreAffected": {
-            "First": [37.0, 10.6, 28.3, 28.0, 21.9, 17.9, 3.9],
-            "Last": [29.1, 11.3, 23.1, 22.9, 14.2, 13.2, -3.8]
-        },
-        "exoMidstanceLessAffected": {
-            "First": [31.0, 2.8, 14.8, 24.2, 15.3, -1.4, 2.4],
-            "Last": [33.4, -3.4, 18.5, 19.3, 11.5, 5.1, 0.4]
-        },
-        "baseMidstanceMoreAffected": {
-            "First": [31.4, 17.8, 26.5, 28.3, 42.6, 30.8, 23.8],
-            "Last": [29.7, 19.4, 31.4, 30.7, 25.2, 26.5, 35.8]
-        },
-        "baseMidstanceLessAffected": {
-            "First": [28.6, 6.1, 17.4, 25.2, 29.8, -2.6, 7.2],
-            "Last": [27.2, 1.8, 24.1, 27.4, 20.1, 2.5, 12.5]
-        }
-    }
-
-    # Call the function with the data
-    results = compare_twodata(Midstance, 'Midstance')
-    print(results)
+    # metabolic
+    before_metabolic = [4.7, 2.1, 3.8, 2.8, 3.9]
+    after_metabolic  = [ 3.8540, 2.6250, 3.5720, 2.6600, 3.1590]
+    res = paired_t_test(before_metabolic, after_metabolic)
+    print(res)
 
 
-    # # Perform one-sample t-test
-    stanceswing_midstance = [0.5, 8.0, 8.2, 9.3, 11.0, 19.5, 36.7]      # Stance & Swing most affected
-    stanceswing_Initial = [0.4,7.3,3.3,5.4,10.7,8.5,11.7]               # Stance & Swing most affected
 
-    res = one_sample_t_test(stanceswing_midstance, test_value=0, alpha=0.05)
-    results = testTool.normality_test(stanceswing_midstance, method="all")
-    print(res, '===', results)
+    # Midstance = {
+    #     "exoMidstanceMoreAffected": {
+    #         "First": [37.0, 10.6, 28.3, 28.0, 21.9, 17.9, 3.9],
+    #         "Last": [29.1, 11.3, 23.1, 22.9, 14.2, 13.2, -3.8]
+    #     },
+    #     "exoMidstanceLessAffected": {
+    #         "First": [31.0, 2.8, 14.8, 24.2, 15.3, -1.4, 2.4],
+    #         "Last": [33.4, -3.4, 18.5, 19.3, 11.5, 5.1, 0.4]
+    #     },
+    #     "baseMidstanceMoreAffected": {
+    #         "First": [31.4, 17.8, 26.5, 28.3, 42.6, 30.8, 23.8],
+    #         "Last": [29.7, 19.4, 31.4, 30.7, 25.2, 26.5, 35.8]
+    #     },
+    #     "baseMidstanceLessAffected": {
+    #         "First": [28.6, 6.1, 17.4, 25.2, 29.8, -2.6, 7.2],
+    #         "Last": [27.2, 1.8, 24.1, 27.4, 20.1, 2.5, 12.5]
+    #     }
+    # }
+
+    # # Call the function with the data
+    # results = compare_twodata(Midstance, 'Midstance')
+    # print(results)
+
+
+    # # # Perform one-sample t-test
+    # stanceswing_midstance = [0.5, 8.0, 8.2, 9.3, 11.0, 19.5, 36.7]      # Stance & Swing most affected
+    # stanceswing_Initial = [0.4,7.3,3.3,5.4,10.7,8.5,11.7]               # Stance & Swing most affected
+
+    # res = one_sample_t_test(stanceswing_midstance, test_value=0, alpha=0.05)
+    # results = testTool.normality_test(stanceswing_midstance, method="all")
+    # print(res, '===', results)
